@@ -1,118 +1,178 @@
-import tkinter as tk
-from tkinter import messagebox, ttk
+# -*- coding: utf-8 -*-
+import os
+
+# Исправление ошибки кодировки 0xc2 для Windows
+os.environ['PGCLIENTENCODING'] = 'utf8'
+
 import psycopg2
-import qrcode  # Библиотека для QR
-from PIL import ImageTk, Image # Для отображения QR в окне
+from tkinter import *
+from tkinter import messagebox, ttk
 
-def get_connection():
-    conn = psycopg2.connect(
-        database="RepairServiceDB", 
-        user="postgres",
-        password="Storm_shadow2006",
-        host="127.0.0.1",
-        port="5432"
-    )
+# --- НАСТРОЙКИ БАЗЫ ДАННЫХ ---
+DB_PARAMS = {
+    "dbname": "RepairServiceDB",  # ЗАМЕНИ НА СВОЕ
+    "user": "postgres",
+    "password": "Storm_shadow2006", # ЗАМЕНИ НА СВОЙ
+    "host": "localhost",
+    "port": "5432"
+}
+
+try:
+    conn = psycopg2.connect(**DB_PARAMS)
     conn.set_client_encoding('UTF8')
-    return conn
+    cursor = conn.cursor()
+    print("Подключение к БД успешно!")
+except Exception as e:
+    print(f"Ошибка подключения: {e}")
 
-class RepairApp(tk.Tk):
+class RepairApp(Tk):
     def __init__(self):
         super().__init__()
-        self.title("ООО Конди — Модифицированная система (Задание 3)")
-        self.geometry("1100x700")
-        self.show_login_screen()
-
-    def clear_screen(self):
-        for widget in self.winfo_children():
-            widget.destroy()
-
-    def show_login_screen(self):
-        self.clear_screen()
-        frame = tk.Frame(self)
-        frame.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
-        tk.Label(frame, text="Вход в систему", font=("Arial", 20, "bold")).pack(pady=10)
+        self.title("ИС 'Ремонт техники' - Задание 2-3")
+        self.geometry("1000x600")
         
-        login_e = tk.Entry(frame); login_e.pack(pady=5)
-        pass_e = tk.Entry(frame, show="*"); pass_e.pack(pady=5)
-
-        def attempt_login():
-            try:
-                conn = get_connection()
-                cur = conn.cursor()
-                cur.execute("SELECT fio, role_id FROM users WHERE login=%s AND password=%s", 
-                            (login_e.get(), pass_e.get()))
-                user = cur.fetchone()
-                cur.close()
-                conn.close()
-
-                if user:
-                    # Сохраняем роль, чтобы знать, какие кнопки показывать
-                    self.user_fio = user[0]
-                    self.user_role = user[1]
-                    messagebox.showinfo("Успех", f"Добро пожаловать, {user[0]}\nРоль: {user[1]}")
-                    self.show_main_menu()
-                else:
-                    messagebox.showerror("Ошибка", "Неверный логин или пароль")
-            except Exception as e:
-                messagebox.showerror("Ошибка", f"Проблема с БД: {e}")
-
-        tk.Button(frame, text="Войти", command=attempt_login, bg="#2196F3", fg="white").pack(pady=20)
-
-    def show_main_menu(self):
-        self.clear_screen()
+        # ID текущего пользователя (для Задания 3)
+        self.current_user_id = 1 
         
-        tk.Label(self, text=f"Пользователь: {self.user_fio} ({self.user_role})", font=("Arial", 10, "italic")).pack(anchor=tk.W, padx=10)
+        self.create_widgets()
+        self.load_data()
 
-        # Таблица заявок
-        columns = ("id", "date", "type", "model", "status")
-        tree = ttk.Treeview(self, columns=columns, show="headings")
-        for col in columns: tree.heading(col, text=col)
-        tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+    def create_widgets(self):
+        # Верхняя панель
+        toolbar = Frame(self, pady=10, bg="#eeeeee")
+        toolbar.pack(side=TOP, fill=X)
 
-        # Загрузка данных
+        # Кнопки CRUD
+        Button(toolbar, text="➕ Создать", bg="#4CAF50", fg="white", font=("Arial", 9, "bold"),
+               command=self.open_add_window).pack(side=LEFT, padx=5)
+        
+        Button(toolbar, text="✏️ Редактировать", bg="#FF9800", fg="white", font=("Arial", 9, "bold"),
+               command=self.open_edit_window).pack(side=LEFT, padx=5)
+        
+        Button(toolbar, text="🔄 Обновить", command=self.load_data).pack(side=LEFT, padx=5)
+
+        # Поиск
+        Label(toolbar, text="  Поиск (модель):", bg="#eeeeee").pack(side=LEFT)
+        self.search_entry = Entry(toolbar)
+        self.search_entry.pack(side=LEFT, padx=5)
+        self.search_entry.bind("<KeyRelease>", lambda e: self.load_data(self.search_entry.get()))
+
+        # Таблица
+        self.tree = ttk.Treeview(self, columns=("id", "date", "type", "model", "status"), show='headings')
+        self.tree.heading("id", text="ID")
+        self.tree.heading("date", text="Дата начала")
+        self.tree.heading("type", text="Тип техники")
+        self.tree.heading("model", text="Модель")
+        self.tree.heading("status", text="Статус (ID)")
+        
+        # Настройка колонок
+        self.tree.column("id", width=50, anchor=CENTER)
+        self.tree.column("status", width=80, anchor=CENTER)
+        self.tree.pack(fill=BOTH, expand=True, padx=10, pady=10)
+
+    def load_data(self, search_query=""):
+        for i in self.tree.get_children():
+            self.tree.delete(i)
         try:
-            conn = get_connection()
-            cur = conn.cursor()
-            cur.execute("SELECT request_id, start_date, equipment_type, model, request_status_id FROM requests")
-            for row in cur.fetchall(): tree.insert("", tk.END, values=row)
-            cur.close(); conn.close()
-        except: pass
+            if search_query:
+                cursor.execute("SELECT request_id, start_date, equipment_type, model, request_status_id FROM requests WHERE model ILIKE %s", (f'%{search_query}%',))
+            else:
+                cursor.execute("SELECT request_id, start_date, equipment_type, model, request_status_id FROM requests ORDER BY request_id DESC")
+            
+            for row in cursor.fetchall():
+                self.tree.insert("", END, values=row)
+        except Exception as e:
+            print(f"Ошибка загрузки данных: {e}")
 
-        # --- КНОПКИ УПРАВЛЕНИЯ ---
-        btn_frame = tk.Frame(self)
-        btn_frame.pack(pady=20)
+    # --- ОКНО СОЗДАНИЯ (INSERT) ---
+    def open_add_window(self):
+        self.add_win = Toplevel(self)
+        self.add_win.title("Новая заявка")
+        self.add_win.geometry("350x420")
 
-        # Кнопка выхода (доступна всем)
-        tk.Button(btn_frame, text="Выйти", command=self.show_login_screen).pack(side=tk.LEFT, padx=5)
+        frame = Frame(self.add_win, padx=20, pady=20)
+        frame.pack(fill=BOTH)
 
-        # ФУНКЦИОНАЛ МЕНЕДЖЕРА ПО КАЧЕСТВУ (Задание 3)
-        if self.user_role == "Менеджер по качеству":
-            tk.Button(btn_frame, text="Генерация QR-кода", bg="#FF9800", command=self.generate_feedback_qr).pack(side=tk.LEFT, padx=5)
-            tk.Button(btn_frame, text="Продлить срок заявки", bg="#9C27B0", fg="white", command=self.extend_request).pack(side=tk.LEFT, padx=5)
+        Label(frame, text="Тип оборудования:").pack(anchor=W)
+        self.ent_type = Entry(frame, width=35)
+        self.ent_type.pack(pady=5)
 
-    def generate_feedback_qr(self):
-        # Ссылка из ТЗ
-        url = "https://docs.google.com/forms/d/e/1FAIpQLSdhZcExx6LSIXxk0ub55mSu-WIh23WYdGG9HY5EZhLDo7P8eA/viewform?usp=sf_link"
+        Label(frame, text="Модель:").pack(anchor=W)
+        self.ent_model = Entry(frame, width=35)
+        self.ent_model.pack(pady=5)
+
+        Label(frame, text="Описание проблемы:").pack(anchor=W)
+        self.ent_desc = Text(frame, width=30, height=5)
+        self.ent_desc.pack(pady=5)
+
+        Button(frame, text="СОХРАНИТЬ", bg="#2196F3", fg="white", font=("Arial", 10, "bold"),
+               command=self.save_new_request).pack(pady=15)
+
+    def save_new_request(self):
+        v_type = self.ent_type.get().strip()
+        v_model = self.ent_model.get().strip()
+        v_desc = self.ent_desc.get("1.0", END).strip()
+
+        if not v_type or not v_model:
+            messagebox.showwarning("Внимание", "Заполните тип и модель!")
+            return
+
+        try:
+            sql = """INSERT INTO requests (start_date, equipment_type, model, problem_description, request_status_id, client_id) 
+                     VALUES (CURRENT_DATE, %s, %s, %s, 1, %s)"""
+            cursor.execute(sql, (v_type, v_model, v_desc, self.current_user_id))
+            conn.commit()
+            messagebox.showinfo("Успех", "Заявка добавлена!")
+            self.add_win.destroy()
+            self.load_data()
+        except Exception as e:
+            conn.rollback()
+            messagebox.showerror("Ошибка", f"Не удалось сохранить: {e}")
+
+    # --- ОКНО РЕДАКТИРОВАНИЯ (UPDATE) ---
+    def open_edit_window(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Внимание", "Выберите строку для редактирования!")
+            return
         
-        qr = qrcode.QRCode(box_size=10, border=2)
-        qr.add_data(url)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
-        
-        # Окно с QR
-        qr_win = tk.Toplevel(self)
-        qr_win.title("QR-код для отзыва")
-        
-        img_tk = ImageTk.PhotoImage(img)
-        lbl = tk.Label(qr_win, image=img_tk)
-        lbl.image = img_tk 
-        lbl.pack(padx=20, pady=20)
-        tk.Label(qr_win, text="Отсканируйте для оценки качества").pack(pady=5)
+        values = self.tree.item(selected)['values']
+        req_id = values[0]
 
-    def extend_request(self):
-        # Реализация права продлевать срок (Задание 3)
-        new_date = "2024-01-01" # Пример новой даты
-        messagebox.showinfo("Менеджер по качеству", f"Срок заявки успешно продлен до {new_date}\n(Согласовано с заказчиком)")
+        self.edit_win = Toplevel(self)
+        self.edit_win.title(f"Редактирование №{req_id}")
+        self.edit_win.geometry("350x250")
+
+        frame = Frame(self.edit_win, padx=20, pady=20)
+        frame.pack(fill=BOTH)
+
+        Label(frame, text="Изменить статус (ID):").pack(anchor=W)
+        self.upd_status = Entry(frame, width=35)
+        self.upd_status.insert(0, values[4]) # Статус из таблицы
+        self.upd_status.pack(pady=5)
+
+        Label(frame, text="Изменить модель:").pack(anchor=W)
+        self.upd_model = Entry(frame, width=35)
+        self.upd_model.insert(0, values[3]) # Модель из таблицы
+        self.upd_model.pack(pady=5)
+
+        Button(frame, text="ОБНОВИТЬ ДАННЫЕ", bg="#FF9800", fg="white", font=("Arial", 10, "bold"),
+               command=lambda: self.save_update(req_id)).pack(pady=15)
+
+    def save_update(self, req_id):
+        n_status = self.upd_status.get().strip()
+        n_model = self.upd_model.get().strip()
+
+        try:
+            sql = "UPDATE requests SET request_status_id = %s, model = %s WHERE request_id = %s"
+            cursor.execute(sql, (n_status, n_model, req_id))
+            conn.commit()
+            messagebox.showinfo("Успех", "Данные обновлены!")
+            self.edit_win.destroy()
+            self.load_data()
+        except Exception as e:
+            conn.rollback()
+            messagebox.showerror("Ошибка", f"Не удалось обновить: {e}")
 
 if __name__ == "__main__":
     app = RepairApp()
