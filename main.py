@@ -167,7 +167,7 @@ class RepairApp(Tk):
         if not sel: return
         rid = self.tree.item(sel)['values'][0]
         win = Toplevel(self); f = Frame(win, padx=20, pady=20); f.pack()
-        txt = Text(f, width=40, height=10); txt.pack()
+        txt = Text(f, width=40, ight=10); txt.pack()
         with get_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT message FROM comments WHERE request_id = %s", (rid,))
